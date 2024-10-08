@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Object Detection with TensorFlow.js (Camera Input)</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <!-- Ganti dengan path model TensorFlow.js yang telah dikonversi -->
+  <script src="tfjs_model/model.json"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+    }
+    #video {
+      max-width: 100%;
+      height: auto;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    #snap {
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Object Detection with TensorFlow.js (Camera)</h1>
+
+  <!-- Video dari kamera -->
+  <video id="video" autoplay playsinline></video>
+
+  <!-- Canvas untuk menampilkan deteksi objek -->
+  <canvas id="canvas"></canvas>
+
+  <!-- Tombol untuk menangkap gambar dari video -->
+  <button id="snap">Capture & Detect</button>
+
+  <script>
+    // Mendapatkan akses ke video dari kamera
+    async function setupCamera() {
+      const video = document.getElementById('video');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
+
+      return new Promise((resolve) => {
+        video.onloadedmetadata = () => {
+          resolve(video);
+        };
+      });
+    }
+
+    // Memuat model TensorFlow.js
+    async function loadModel() {
+      const model = await tf.loadGraphModel('tfjs_model/model.json');
+      console.log("Model loaded");
+      return model;
+    }
+
+    // Fungsi untuk mendeteksi objek pada gambar (diambil dari video)
+    async function detectObject(model, videoElement) {
+      const tensor = tf.browser.fromPixels(videoElement)
+          .resizeNearestNeighbor([224, 224]) // Sesuaikan dengan input model Anda
+          .toFloat()
+          .expandDims(0);
+
+      // Lakukan prediksi
+      const predictions = await model.predict(tensor).data();
+      console.log("Predictions: ", predictions);
+
+      // Tampilkan hasil prediksi (sesuaikan dengan output model Anda)
+      drawBoundingBoxes(predictions, videoElement);
+    }
+
+    // Fungsi untuk menggambar kotak deteksi pada canvas
+    function drawBoundingBoxes(predictions, videoElement) {
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      const videoWidth = videoElement.videoWidth;
+      const videoHeight = videoElement.videoHeight;
+
+      // Set ukuran canvas sama dengan video
+      canvas.width = videoWidth;
+      canvas.height = videoHeight;
+
+      ctx.clearRect(0, 0, videoWidth, videoHeight); // Hapus gambar sebelumnya
+
+      // Contoh menambahkan kotak deteksi (sesuaikan dengan format prediksi model Anda)
+      predictions.forEach(pred => {
+        // Dalam contoh ini, kita menganggap pred berupa koordinat x, y, width, height
+        const [x, y, width, height] = pred; // Sesuaikan sesuai output model Anda
+
+        // Gambar kotak pada video
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x * videoWidth, y * videoHeight, width * videoWidth, height * videoHeight);
+      });
+    }
+
+    // Fungsi untuk menangkap gambar dari video
+    function captureImage(videoElement) {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoElement.videoWidth;
+      canvas.height = videoElement.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    }
+
+    // Memulai kamera dan memuat model saat halaman dimuat
+    window.onload = async () => {
+      const video = await setupCamera();
+      const model = await loadModel();
+
+      // Tangkap gambar dari video dan deteksi objek ketika tombol ditekan
+      document.getElementById('snap').addEventListener('click', async () => {
+        const imageCanvas = captureImage(video);
+        await detectObject(model, imageCanvas);
+      });
+    };
+  </script>
+</body>
+</html>
