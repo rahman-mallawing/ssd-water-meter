@@ -13,6 +13,7 @@
       justify-content: center;
       height: 100vh;
       background-color: #f0f0f0;
+      margin: 0;
     }
     .wrapper {
       position: relative;
@@ -26,11 +27,23 @@
       top: 0;
       left: 0;
     }
+    #switch-camera-btn {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      padding: 10px;
+      background-color: rgba(255, 255, 255, 0.7);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      z-index: 10;
+    }
   </style>
 </head>
 <body>
   <h1>Real-Time Object Detection with TensorFlow.js</h1>
   <div class="wrapper">
+    <button id="switch-camera-btn">Switch Camera</button>
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas"></canvas>
   </div>
@@ -46,11 +59,10 @@
     const INPUT_MEAN = 127.5;
     const INPUT_STD = 127.5;
     let labels = [];
-    let tapTimeout; // Untuk menangani double tap
 
     // Memuat label dari file
     async function loadLabels() {
-      const response = await fetch('labelmap.txt');
+      const response = await fetch('tfjs_model/labelmap.txt');
       const data = await response.text();
       labels = data.split('\n');
     }
@@ -144,16 +156,8 @@
       });
     }
 
-    // Menangani double tap
-    function handleDoubleTap() {
-      clearTimeout(tapTimeout);
-      tapTimeout = setTimeout(() => {
-        // Reset tap timeout jika tidak ada double tap
-      }, 300);
-      switchCamera();
-    }
-
-    document.getElementById('video').addEventListener('click', handleDoubleTap);
+    // Event listener untuk tombol switch camera
+    document.getElementById('switch-camera-btn').addEventListener('click', switchCamera);
 
     window.onload = async () => {
       await loadLabels();
