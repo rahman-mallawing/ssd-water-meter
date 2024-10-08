@@ -5,24 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Real-Time Object Detection with TensorFlow.js</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-  <script src="tfjs_model/model.json"></script> <!-- Ganti dengan path ke model.js -->
   <style>
     body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-    }
-    video, canvas {
-      max-width: 100%;
-      height: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background-color: #f0f0f0;
     }
     .wrapper {
       position: relative;
-      display: inline-block;
+      width: 100%;
+      max-width: 600px;
     }
-    #canvas {
+    video, canvas {
+      width: 100%;
+      height: auto;
       position: absolute;
       top: 0;
       left: 0;
+    }
+    button {
+      margin: 10px;
+      padding: 10px;
+      font-size: 16px;
+      cursor: pointer;
     }
   </style>
 </head>
@@ -32,84 +40,123 @@
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas"></canvas>
   </div>
+  <button id="switchCamera">Switch Camera</button>
 
   <script>
-    const minConfidenceThreshold = 0.2; // Ambang kepercayaan minimum
+    let video;
+    let model;
+    let currentStream;
+    let isFrontCamera = true; // Menyimpan mode kamera saat ini
+    const minConfidenceThreshold = 0.5;
+    const MODEL_WIDTH = 300; // Sesuaikan dengan lebar input model Anda
+    const MODEL_HEIGHT = 300; // Sesuaikan dengan tinggi input model Anda
+    const INPUT_MEAN = 127.5;
+    const INPUT_STD = 127.5;
+    let labels = [];
 
+    // Memuat label dari file
+    async function loadLabels() {
+      const response = await fetch('labelmap.txt');
+      const data = await response.text();
+      labels = data.split('\n');
+    }
+
+    // Setup kamera
     async function setupCamera() {
-      const video = document.getElementById('video');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      video.srcObject = stream;
+      video = document.getElementById('video');
+      const constraints = {
+        video: {
+          facingMode: isFrontCamera ? 'user' : 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      };
+
+      currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = currentStream;
       return new Promise((resolve) => {
-        video.onloadedmetadata = () => resolve(video);
+        video.onloadedmetadata = () => {
+          resolve(video);
+        };
       });
     }
 
+    // Memuat model
     async function loadModel() {
-      //const model = await tf.loadGraphModel('tfjs_model/model.json'); // Muat model
-      const model = await tf.loadGraphModel('https://tfhub.dev/tensorflow/ssd_mobilenet_v2/1/default/1');
-      console.log("Model loaded");
-      return model;
+      model = await tf.loadGraphModel('tfjs_model/model.json');
     }
 
-    async function detectObjectsInRealTime(video, model) {
+    // Deteksi objek
+    async function detectFrame() {
+      const img = tf.browser.fromPixels(video);
+      const resized = tf.image.resizeBilinear(img, [MODEL_HEIGHT, MODEL_WIDTH]);
+      const normalized = resized.sub(INPUT_MEAN).div(INPUT_STD);
+      const batched = normalized.expandDims(0);
+
+      const predictions = await model.executeAsync(batched);
+
+      const scoresTensor = predictions[0];
+      const boxesTensor = predictions[1];
+      const classesTensor = predictions[2];
+      const numDetectionsTensor = predictions[3];
+
+      const scores = scoresTensor.dataSync();
+      const boxes = boxesTensor.dataSync();
+      const numDetections = numDetectionsTensor.dataSync()[0];
+
+      // Bersihkan canvas
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d');
-      const videoWidth = video.videoWidth;
-      const videoHeight = video.videoHeight;
-      canvas.width = videoWidth;
-      canvas.height = videoHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      async function detectFrame() {
-        console.log(predictions);
+      // Loop melalui deteksi
+      for (let i = 0; i < numDetections; i++) {
+        if (scores[i] > minConfidenceThreshold) {
+          const ymin = boxes[i * 4] * video.videoHeight;
+          const xmin = boxes[i * 4 + 1] * video.videoWidth;
+          const ymax = boxes[i * 4 + 2] * video.videoHeight;
+          const xmax = boxes[i * 4 + 3] * video.videoWidth;
 
-        // Ambil frame dari video
-        const img = tf.browser.fromPixels(video);
-        const resizedImg = tf.image.resizeBilinear(img, [300, 300]); // Sesuaikan dengan ukuran input model
-        const expandedImg = resizedImg.expandDims(0);
+          // Gambar kotak
+          ctx.strokeStyle = "red";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(xmin, ymin, xmax - xmin, ymax - ymin);
 
-        // Prediksi dengan model
-        const predictions = await model.executeAsync(expandedImg);
+          // Gambar label
+          const classIndex = classesTensor.dataSync()[i];
+          const className = labels[classIndex];
+          const score = (scores[i] * 100).toFixed(1);
 
-        // Ambil bounding boxes, kelas, dan skor
-        const boxes = predictions[1].arraySync()[0]; // Bounding box
-        const classes = predictions[3].dataSync(); // Class
-        const scores = predictions[0].dataSync(); // Skor
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height); // Bersihkan canvas
-
-        // Gambar bounding box di setiap objek yang terdeteksi dengan confidence > threshold
-        for (let i = 0; i < scores.length; i++) {
-          if (scores[i] > minConfidenceThreshold) {
-            const [ymin, xmin, ymax, xmax] = boxes[i];
-            const x = xmin * videoWidth;
-            const y = ymin * videoHeight;
-            const width = (xmax - xmin) * videoWidth;
-            const height = (ymax - ymin) * videoHeight;
-
-            // Gambar bounding box
-            ctx.strokeStyle = "red";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x, y, width, height);
-
-            // Tampilkan label
-            ctx.fillStyle = "white";
-            ctx.font = "16px Arial";
-            ctx.fillText(`Class: ${classes[i]} - ${(scores[i] * 100).toFixed(2)}%`, x, y > 10 ? y - 5 : 10);
-          }
+          ctx.fillStyle = "white";
+          ctx.font = "16px Arial";
+          ctx.fillText(`${className}: ${score}%`, xmin, ymin > 10 ? ymin - 5 : 10);
         }
-
-        requestAnimationFrame(detectFrame); // Ulangi deteksi pada frame berikutnya
       }
 
-      detectFrame();
+      tf.dispose([img, resized, normalized, batched, scoresTensor, boxesTensor, classesTensor, numDetectionsTensor]);
+
+      requestAnimationFrame(detectFrame);
     }
 
-    window.onload = async () => {
-      const video = await setupCamera(); // Setup kamera
-      const model = await loadModel(); // Load model
+    // Ganti mode kamera
+    function switchCamera() {
+      // Matikan stream kamera saat ini
+      currentStream.getTracks().forEach(track => track.stop());
+      // Ganti mode kamera
+      isFrontCamera = !isFrontCamera;
+      // Setup kamera baru
+      setupCamera().then(() => {
+        detectFrame();
+      });
+    }
 
-      detectObjectsInRealTime(video, model); // Mulai deteksi objek
+    document.getElementById('switchCamera').addEventListener('click', switchCamera);
+
+    window.onload = async () => {
+      await loadLabels();
+      await setupCamera();
+      await loadModel();
+      detectFrame();
     };
   </script>
 </body>
