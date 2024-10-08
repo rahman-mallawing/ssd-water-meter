@@ -41,7 +41,7 @@
   </style>
 </head>
 <body>
-  <h1>Real-Time Object Detection with TensorFlow.js-ANDROID</h1>
+  <h1>Real-Time Object Detection with TensorFlow.js</h1>
   <div class="wrapper">
     <button id="switch-camera-btn">Switch Camera</button>
     <video id="video" autoplay playsinline></video>
@@ -53,7 +53,7 @@
     let model;
     let currentStream;
     let isFrontCamera = true; // Menyimpan mode kamera saat ini
-    const minConfidenceThreshold = 0.1;
+    const minConfidenceThreshold = 0.5;
     const MODEL_WIDTH = 300; // Sesuaikan dengan lebar input model Anda
     const MODEL_HEIGHT = 300; // Sesuaikan dengan tinggi input model Anda
     const INPUT_MEAN = 127.5;
@@ -62,7 +62,7 @@
 
     // Memuat label dari file
     async function loadLabels() {
-      const response = await fetch('tfjs_model/labelmap.txt');
+      const response = await fetch('labelmap.txt');
       const data = await response.text();
       labels = data.split('\n');
     }
@@ -94,53 +94,60 @@
 
     // Deteksi objek
     async function detectFrame() {
-      const img = tf.browser.fromPixels(video);
-      const resized = tf.image.resizeBilinear(img, [MODEL_HEIGHT, MODEL_WIDTH]);
-      const normalized = resized.sub(INPUT_MEAN).div(INPUT_STD);
-      const batched = normalized.expandDims(0);
-
-      const predictions = await model.executeAsync(batched);
-
-      const scoresTensor = predictions[0];
-      const boxesTensor = predictions[1];
-      const classesTensor = predictions[2];
-      const numDetectionsTensor = predictions[3];
-
-      const scores = scoresTensor.dataSync();
-      const boxes = boxesTensor.dataSync();
-      const numDetections = numDetectionsTensor.dataSync()[0];
-
-      // Bersihkan canvas
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d');
+
+      // Ambil frame dari video
+      const videoFrame = tf.browser.fromPixels(video);
+      
+      // Resize gambar sesuai dengan ukuran input model
+      const resized = tf.image.resizeBilinear(videoFrame, [MODEL_HEIGHT, MODEL_WIDTH]);
+      
+      // Normalisasi pixel jika model membutuhkan
+      const normalized = resized.sub(INPUT_MEAN).div(INPUT_STD).expandDims();
+
+      // Jalankan deteksi objek
+      const predictions = await model.executeAsync(normalized);
+
+      const boxes = predictions[1].dataSync();     // Koordinat bounding box
+      const scores = predictions[0].dataSync();    // Confidence score
+      const classes = predictions[2].dataSync();   // Label classes
+
+      const videoWidth = video.videoWidth;
+      const videoHeight = video.videoHeight;
+
+      // Bersihkan canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       // Loop melalui deteksi
-      for (let i = 0; i < numDetections; i++) {
+      for (let i = 0; i < scores.length; i++) {
         if (scores[i] > minConfidenceThreshold) {
-          const ymin = boxes[i * 4] * video.videoHeight;
-          const xmin = boxes[i * 4 + 1] * video.videoWidth;
-          const ymax = boxes[i * 4 + 2] * video.videoHeight;
-          const xmax = boxes[i * 4 + 3] * video.videoWidth;
+          const [ymin, xmin, ymax, xmax] = [
+            boxes[i * 4 + 0] * videoHeight,
+            boxes[i * 4 + 1] * videoWidth,
+            boxes[i * 4 + 2] * videoHeight,
+            boxes[i * 4 + 3] * videoWidth
+          ];
 
-          // Gambar kotak
-          ctx.strokeStyle = "green";
-          ctx.lineWidth = 4;
+          // Gambar kotak deteksi di canvas
+          ctx.strokeStyle = 'red';
+          ctx.lineWidth = 2;
           ctx.strokeRect(xmin, ymin, xmax - xmin, ymax - ymin);
 
           // Gambar label
-          const classIndex = classesTensor.dataSync()[i];
-          const className = labels[classIndex];
-          const score = (scores[i] * 100).toFixed(1);
+          const label = labels[classes[i]];
+          const confidence = (scores[i] * 100).toFixed(1);
 
-          ctx.fillStyle = "white";
-          ctx.font = "16px Arial";
-          ctx.fillText(`${className}: ${score}%`, xmin, ymin > 10 ? ymin - 5 : 10);
+          ctx.fillStyle = 'white';
+          ctx.font = '16px Arial';
+          ctx.fillText(`${label}: ${confidence}%`, xmin, ymin > 10 ? ymin - 5 : 10);
         }
       }
 
-      tf.dispose([img, resized, normalized, batched, scoresTensor, boxesTensor, classesTensor, numDetectionsTensor]);
+      // Buang tensor yang tidak diperlukan untuk mencegah kebocoran memori
+      tf.dispose([videoFrame, resized, normalized, ...predictions]);
 
+      // Jalankan deteksi berulang
       requestAnimationFrame(detectFrame);
     }
 

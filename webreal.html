@@ -5,44 +5,81 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Real-Time Object Detection with TensorFlow.js</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-  <!-- Ganti dengan path model TensorFlow.js yang telah dikonversi -->
-  <script src="tfjs_model/model.json"></script>
   <style>
     body {
-      font-family: Arial, sans-serif;
-      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background-color: #f0f0f0;
+      margin: 0;
     }
-    #video {
-      max-width: 100%;
+    .wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 600px;
+    }
+    video, canvas {
+      width: 100%;
       height: auto;
-    }
-    #canvas {
       position: absolute;
       top: 0;
       left: 0;
     }
-    #wrapper {
-      position: relative;
-      display: inline-block;
+    #switch-camera-btn {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      padding: 10px;
+      background-color: rgba(255, 255, 255, 0.7);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      z-index: 10;
     }
   </style>
 </head>
 <body>
   <h1>Real-Time Object Detection with TensorFlow.js</h1>
-
-  <!-- Wrapper untuk menampilkan video dan hasil deteksi secara tumpang tindih -->
-  <div id="wrapper">
+  <div class="wrapper">
+    <button id="switch-camera-btn">Switch Camera</button>
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas"></canvas>
   </div>
 
   <script>
-    // Mendapatkan akses ke video dari kamera
-    async function setupCamera() {
-      const video = document.getElementById('video');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      video.srcObject = stream;
+    let video;
+    let model;
+    let currentStream;
+    let isFrontCamera = true; // Menyimpan mode kamera saat ini
+    const minConfidenceThreshold = 0.5;
+    const MODEL_WIDTH = 300; // Sesuaikan dengan lebar input model Anda
+    const MODEL_HEIGHT = 300; // Sesuaikan dengan tinggi input model Anda
+    const INPUT_MEAN = 127.5;
+    const INPUT_STD = 127.5;
+    let labels = [];
 
+    // Memuat label dari file
+    async function loadLabels() {
+      const response = await fetch('labelmap.txt');
+      const data = await response.text();
+      labels = data.split('\n');
+    }
+
+    // Setup kamera
+    async function setupCamera() {
+      video = document.getElementById('video');
+      const constraints = {
+        video: {
+          facingMode: isFrontCamera ? 'user' : 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      };
+
+      currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = currentStream;
       return new Promise((resolve) => {
         video.onloadedmetadata = () => {
           resolve(video);
@@ -50,75 +87,90 @@
       });
     }
 
-    // Memuat model TensorFlow.js
+    // Memuat model
     async function loadModel() {
-      const model = await tf.loadGraphModel('tfjs_model/model.json');
-      console.log("Model loaded");
-      return model;
+      model = await tf.loadGraphModel('tfjs_model/model.json');
     }
 
-    // Fungsi untuk mendeteksi objek pada frame dari video secara real-time
-    async function detectObjectsInRealTime(video, model) {
+    // Deteksi objek
+    async function detectFrame() {
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d');
+
+      // Ambil frame dari video
+      const videoFrame = tf.browser.fromPixels(video);
+      
+      // Resize gambar sesuai dengan ukuran input model
+      const resized = tf.image.resizeBilinear(videoFrame, [MODEL_HEIGHT, MODEL_WIDTH]);
+      
+      // Normalisasi pixel jika model membutuhkan
+      const normalized = resized.sub(INPUT_MEAN).div(INPUT_STD).expandDims();
+
+      // Jalankan deteksi objek
+      const predictions = await model.executeAsync(normalized);
+
+      const boxes = predictions[1].dataSync();     // Koordinat bounding box
+      const scores = predictions[0].dataSync();    // Confidence score
+      const classes = predictions[2].dataSync();   // Label classes
+
       const videoWidth = video.videoWidth;
       const videoHeight = video.videoHeight;
 
-      // Set ukuran canvas sesuai dengan ukuran video
-      canvas.width = videoWidth;
-      canvas.height = videoHeight;
+      // Bersihkan canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Fungsi untuk mendeteksi dan menggambar hasil deteksi
-      async function detect() {
-        // Tangkap frame dari video
-        const tensor = tf.browser.fromPixels(video)
-          .resizeNearestNeighbor([224, 224])  // Sesuaikan dengan input model Anda
-          .toFloat()
-          .expandDims(0);
+      // Loop melalui deteksi
+      for (let i = 0; i < scores.length; i++) {
+        if (scores[i] > minConfidenceThreshold) {
+          const [ymin, xmin, ymax, xmax] = [
+            boxes[i * 4 + 0] * videoHeight,
+            boxes[i * 4 + 1] * videoWidth,
+            boxes[i * 4 + 2] * videoHeight,
+            boxes[i * 4 + 3] * videoWidth
+          ];
 
-        // Lakukan prediksi menggunakan model
-        const predictions = await model.predict(tensor).data();
-        console.log(predictions);  // Anda bisa menyesuaikan cara menampilkan hasil prediksi
+          // Gambar kotak deteksi di canvas
+          ctx.strokeStyle = 'red';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(xmin, ymin, xmax - xmin, ymax - ymin);
 
-        // Bersihkan canvas sebelum menggambar kotak baru
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+          // Gambar label
+          const label = labels[classes[i]];
+          const confidence = (scores[i] * 100).toFixed(1);
 
-        // Fungsi ini menggambar kotak deteksi (sesuaikan dengan format prediksi model Anda)
-        drawBoundingBoxes(predictions, video);
-
-        // Panggil ulang deteksi untuk frame berikutnya
-        requestAnimationFrame(detect);
+          ctx.fillStyle = 'white';
+          ctx.font = '16px Arial';
+          ctx.fillText(`${label}: ${confidence}%`, xmin, ymin > 10 ? ymin - 5 : 10);
+        }
       }
 
-      // Mulai deteksi secara berulang
-      detect();
+      // Buang tensor yang tidak diperlukan untuk mencegah kebocoran memori
+      tf.dispose([videoFrame, resized, normalized, ...predictions]);
+
+      // Jalankan deteksi berulang
+      requestAnimationFrame(detectFrame);
     }
 
-    // Fungsi untuk menggambar kotak deteksi pada canvas
-    function drawBoundingBoxes(predictions, video) {
-      const canvas = document.getElementById('canvas');
-      const ctx = canvas.getContext('2d');
-      const videoWidth = video.videoWidth;
-      const videoHeight = video.videoHeight;
-
-      // Sesuaikan dengan format prediksi model
-      predictions.forEach(pred => {
-        const [x, y, width, height] = pred; // Contoh koordinat kotak
-
-        // Gambar kotak di sekitar objek terdeteksi
-        ctx.strokeStyle = 'red';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x * videoWidth, y * videoHeight, width * videoWidth, height * videoHeight);
+    // Ganti mode kamera
+    function switchCamera() {
+      // Matikan stream kamera saat ini
+      currentStream.getTracks().forEach(track => track.stop());
+      // Ganti mode kamera
+      isFrontCamera = !isFrontCamera;
+      // Setup kamera baru
+      setupCamera().then(() => {
+        detectFrame();
       });
     }
 
-    // Mulai kamera dan deteksi real-time saat halaman dimuat
-    window.onload = async () => {
-      const video = await setupCamera();
-      const model = await loadModel();
+    // Event listener untuk tombol switch camera
+    document.getElementById('switch-camera-btn').addEventListener('click', switchCamera);
 
-      // Deteksi objek secara real-time
-      detectObjectsInRealTime(video, model);
+    window.onload = async () => {
+      await loadLabels();
+      await setupCamera();
+      await loadModel();
+      detectFrame();
     };
   </script>
 </body>
